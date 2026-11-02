@@ -1,3 +1,28 @@
+> [!NOTE]
+> **LocoManiLab modifications.** This repository is a fork of
+> [NVIDIA/Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T), imported from upstream commit
+> `ab88b50c718f6528e1df9dcbaf75865d1b604760` (without upstream's git history) and modified for the
+> [LocoManiLab](https://github.com/Gamma-Robot/LocoManiLab) benchmark (Gamma Robotics).
+> The original Apache-2.0 [LICENSE](LICENSE) and [ATTRIBUTIONS.md](ATTRIBUTIONS.md) apply; the changes are
+> provided under the same license.
+>
+> Summary of changes:
+> - Unitree G1 embodiments for the LocoManiLab whole-body controllers (`UNITREE_G1_SONIC`, `UNITREE_G1_HEFT`,
+>   `UNITREE_G1_AMO`, `UNITREE_G1_ALMI`, plus a retargeted human-egocentric data tag) with their modality
+>   configs and projector slots.
+> - Training, evaluation, policy-server and TensorRT deployment adjustments used by the LocoManiLab runtime
+>   (e.g. `--trt-engine-path` / `--trt-mode` for `gr00t/eval/run_gr00t_server.py`, backbone matching by
+>   model basename), and an example `finetune.sh` for G1 SONIC data.
+> - Dependency changes so `uv sync` resolves on x86_64 (TensorRT dropped from the default dependencies,
+>   aarch64 wheel path sources removed).
+> - Removed: the simulation-benchmark submodules under `external_dependencies/`, the bundled `demo_data/`,
+>   the vendored aarch64 wheels, the WholeBodyControl demo videos and unused media files. These are
+>   available from upstream at the commit above. The images referenced by the documentation are kept in
+>   `media/` (GIFs via Git LFS).
+>
+> The complete list of added, modified and removed files relative to upstream is in
+> [LOCOMANILAB_MODIFICATIONS.md](LOCOMANILAB_MODIFICATIONS.md).
+
 <div align="center">
 
   <img src="media/header_compress.png" width="800" alt="NVIDIA Isaac GR00T N1.7 Header">
@@ -136,7 +161,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 #### dGPU (x86_64) — Default
 
-Install FFmpeg (required by `torchcodec`, the only supported video backend):
+Install FFmpeg (required by `torchcodec`, the default video backend):
 ```sh
 sudo apt-get update && sudo apt-get install -y ffmpeg
 ```
@@ -175,7 +200,7 @@ Note: GPU dependencies (flash-attn, TensorRT) may require manual installation wi
 
 > **GB300 (sm_103) Users:** Triton 3.3.1 (pinned by PyTorch 2.7) does not support the GB300 GPU architecture (sm_103). `torch.compile` will fail on GB300. Use PyTorch eager mode or TensorRT inference instead. Triton 3.5.1+ adds sm_103 support but is not yet compatible with the pinned PyTorch version.
 
-> **Video Backend:** GR00T uses [`torchcodec`](https://github.com/pytorch/torchcodec) as its sole video decoding backend. Backends such as `decord` and `pyav` are no longer supported. `torchcodec` requires FFmpeg and supports H.264 on all platforms; AV1 decoding is not guaranteed (convert AV1 datasets to H.264 with `examples/SimplerEnv/convert_av1_to_h264.py`). On aarch64 platforms (Thor, Orin), `torchcodec` is built from source during `install_deps.sh` because pre-built wheels are not available — if you encounter a `NotImplementedError`, ensure the build completed successfully.
+> **aarch64 Video Backend:** On aarch64 platforms (Thor, Orin, Spark), `torchcodec` is the required video backend. `install_deps.sh` prefers the prebuilt aarch64 wheel under `scripts/deployment/dgpu/wheels/` (shared by Thor/Spark against FFmpeg 6; Orin uses a matching build against FFmpeg 4) and falls back to a source build only if the wheel is missing. If you encounter `NotImplementedError` from the video backend, ensure `torchcodec` was installed successfully during setup. Other backends (decord, pyav) are not supported on aarch64.
 
 <details>
 <summary><strong>DGX Spark</strong> (tested with DGX Spark GB10)</summary>
@@ -188,13 +213,6 @@ source scripts/activate_spark.sh
 
 See the [Spark setup guide](scripts/deployment/README.md#dgx-spark-setup) for Docker and bare metal details.
 </details>
-
-> ⚠️ **aarch64 users (Spark):** After running `install_deps.sh`, always
-> activate the venv with `source .venv/bin/activate && source scripts/activate_spark.sh`
-> and invoke training with **plain `python`**, not `uv run python`. The latter will
-> re-sync against the root `pyproject.toml` (which targets x86_64 Python 3.10) and
-> destroy the platform-specific environment.
-
 
 <details>
 <summary><strong>Jetson AGX Thor</strong> (tested with JetPack 7.1)</summary>
@@ -214,13 +232,6 @@ source scripts/activate_thor.sh
 See the [Thor setup guide](scripts/deployment/README.md#jetson-thor-setup) for Docker and bare metal details.
 </details>
 
-> ⚠️ **aarch64 users (Thor):** After running `install_deps.sh`, always
-> activate the venv with `source .venv/bin/activate && source scripts/activate_thor.sh`
-> and invoke training with **plain `python`**, not `uv run python`. The latter will
-> re-sync against the root `pyproject.toml` (which targets x86_64 Python 3.10) and
-> destroy the platform-specific environment.
-
-
 <details>
 <summary><strong>Jetson Orin</strong> (tested with JetPack 6.2)</summary>
 
@@ -233,14 +244,7 @@ source scripts/activate_orin.sh
 See the [Orin setup guide](scripts/deployment/README.md#jetson-orin-setup) for Docker and bare metal details.
 </details>
 
-> ⚠️ **aarch64 users (Orin):** After running `install_deps.sh`, always
-> activate the venv with `source .venv/bin/activate && source scripts/activate_orin.sh`
-> and invoke training with **plain `python`**, not `uv run python`. The latter will
-> re-sync against the root `pyproject.toml` (which targets x86_64 Python 3.10) and
-> destroy the platform-specific environment.
-
-
-For a containerized setup that avoids system-level dependency conflicts, see our [Docker Setup Guide](docker/README.md). The recommended container workflow is to start the image first, then clone or pull the repo inside the running container so your checkout uses the image's prebuilt dependency environment.
+For a containerized setup that avoids system-level dependency conflicts, see our [Docker Setup Guide](docker/README.md).
 
 ---
 
@@ -296,21 +300,11 @@ The `modality.json` maps how the concatenated state/action arrays split into nam
 
 > To generate more DROID episodes: `python scripts/download_droid_sample.py --num-episodes 10`
 
-**Using your own data:** Convert your demonstrations to the format above. If coming from LeRobot v3, use the conversion helper in its own environment:
-```bash
-cd scripts/lerobot_conversion
-uv venv
-source .venv/bin/activate
-uv pip install -e . --verbose
-python convert_v3_to_v2.py --repo-id <DATASET_REPO_ID>
-```
-See the full [Data Preparation Guide](getting_started/data_preparation.md) for schema details and examples.
+**Using your own data:** Convert your demonstrations to the format above. If coming from LeRobot v3, use the conversion script: `python scripts/lerobot_conversion/convert_v3_to_v2.py`. See the full [Data Preparation Guide](getting_started/data_preparation.md) for schema details and examples.
 
 ---
 
 ## Inference
-
-> **Prefer an interactive walkthrough?** The [`getting_started/GR00T_inference.ipynb`](getting_started/GR00T_inference.ipynb) notebook steps through loading the model and predicting actions from observations on a sample dataset.
 
 ### Zero-Shot Inference (Base Model)
 
@@ -549,18 +543,6 @@ To add a new benchmark:
 
 ---
 
-## Running Tests
-
-Install the development dependencies before running the test suite:
-```bash
-uv sync --python 3.10 --extra dev
-uv run python -m pytest
-```
-
-Use targeted test paths for faster local checks, and reserve GPU-marked tests for machines with the required CUDA hardware.
-
----
-
 # Contributions
 
 During Early Access we are not accepting pull requests while the codebase stabilizes. If you encounter issues or have suggestions, please open an [Issue](https://github.com/NVIDIA/Isaac-GR00T/issues) in this repository.
@@ -607,3 +589,4 @@ Support during Early Access is best-effort. We will continue iterating toward a 
   booktitle  = {ArXiv Preprint},
 }
 ```
+

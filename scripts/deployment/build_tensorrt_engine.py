@@ -41,7 +41,6 @@ import os
 import time
 from typing import Literal
 
-from gr00t.deployment.modes import BuildEngineMode
 import onnx
 import tensorrt as trt
 import tyro
@@ -50,67 +49,6 @@ import tyro
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-# STRONGLY_TYPED precision sanity check: TRT 10+ STRONGLY_TYPED reads
-# precision from the ONNX tensor types and ignores --precision builder
-# flags. Catch the silent mismatch (user asks fp16, ONNX is bf16, engine
-# silently builds bf16) before burning build time. Indirected through
-# dtype *names* so the helper can be unit-tested without TensorRT.
-_PRECISION_TO_TRT_DTYPE_NAME: dict[str, str] = {
-    "bf16": "BF16",
-    "fp16": "HALF",
-    "fp32": "FLOAT",
-    "fp8": "FP8",
-}
-
-
-def _check_strongly_typed_precision_match(
-    network_dtype_names: set[str], requested_precision: str
-) -> None:
-    """Raise if --precision cannot be honored by this STRONGLY_TYPED network."""
-    expected = _PRECISION_TO_TRT_DTYPE_NAME.get(requested_precision)
-    if expected is None:
-        raise ValueError(
-            f"Unknown precision: {requested_precision!r}. "
-            f"Expected one of {sorted(_PRECISION_TO_TRT_DTYPE_NAME)}."
-        )
-    if expected not in network_dtype_names:
-        raise ValueError(
-            f"--precision={requested_precision} cannot be honored by this ONNX. "
-            f"STRONGLY_TYPED (TRT 10+) reads precision from ONNX tensor types "
-            f"and ignores builder flags. Network has tensor dtypes "
-            f"{sorted(network_dtype_names)}; none of them are {expected}. "
-            f"Either re-export the ONNX with the requested precision, or "
-            f"pass --precision matching the existing ONNX dtypes."
-        )
-    # When fp32 is requested, the network must not contain any reduced-precision
-    # tensors. STRONGLY_TYPED won't promote BF16/FP16/FP8 to FLOAT, so a mixed
-    # BF16+FLOAT network silently runs at BF16 for those tensors despite the
-    # caller asking for fp32.
-    if requested_precision == "fp32":
-        reduced = {"BF16", "HALF", "FP8"} & network_dtype_names
-        if reduced:
-            raise ValueError(
-                f"--precision=fp32 cannot be honored: network also contains "
-                f"reduced-precision tensors {sorted(reduced)}. STRONGLY_TYPED "
-                f"won't promote them to FLOAT, so the engine would silently "
-                f"run mixed precision. Re-export the ONNX as pure FP32, or "
-                f"pass --precision matching the dominant reduced dtype."
-            )
-
-
-def _precision_from_onnx_path(onnx_path: str, default: str) -> str:
-    """Return the precision tag suffixed in the ONNX filename (e.g.
-    ``vit_fp32.onnx`` → ``"fp32"``), else ``default``. Used so the
-    full-pipeline build mirrors the export's per-component dtype instead
-    of forwarding the pipeline-wide ``--precision`` to a mismatched ONNX.
-    """
-    stem = os.path.splitext(os.path.basename(onnx_path))[0]
-    for tag in _PRECISION_TO_TRT_DTYPE_NAME:
-        if stem.endswith(f"_{tag}"):
-            return tag
-    return default
 
 
 # ============================================================
@@ -258,7 +196,9 @@ def build_engine(
     logger.info("\n[Step 1/5] Creating TensorRT builder...")
     builder = trt.Builder(TRT_LOGGER)
 
-    # TRT 10.x prefers STRONGLY_TYPED; EXPLICIT_BATCH is the 9.x fallback.
+    # Use STRONGLY_TYPED network when available (TRT 10.x+).
+    # With STRONGLY_TYPED, tensor types are inferred from the ONNX model and
+    # TRT won't silently change precision. EXPLICIT_BATCH is deprecated in TRT 10.x.
     use_strongly_typed = hasattr(trt.NetworkDefinitionCreationFlag, "STRONGLY_TYPED")
     if use_strongly_typed:
         network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED)
@@ -297,15 +237,11 @@ def build_engine(
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_mb * (1024**2))
 
     if use_strongly_typed:
-        network_dtype_names: set[str] = set()
-        for i in range(network.num_inputs):
-            network_dtype_names.add(network.get_input(i).dtype.name)
-        for i in range(network.num_outputs):
-            network_dtype_names.add(network.get_output(i).dtype.name)
-        _check_strongly_typed_precision_match(network_dtype_names, precision)
+        # With STRONGLY_TYPED, precision comes from the ONNX model's tensor types.
+        # No need to set BF16/FP16 builder flags — they're implicit in the model.
+        # For FP8, the Q/DQ nodes in the ONNX model dictate FP8 layers.
         logger.info(
-            f"Precision '{precision}' matches ONNX tensor dtypes (STRONGLY_TYPED, "
-            f"network has {sorted(network_dtype_names)})"
+            f"Precision '{precision}' enforced by STRONGLY_TYPED network (types from ONNX model)"
         )
     else:
         # Weak-typed fallback: explicitly set precision flags
@@ -430,18 +366,13 @@ def build_full_pipeline(
 
     # Components: (name, onnx_file, engine_file)
     components = [
-        # FP32 ViT preferred for accuracy; falls back to BF16 if only bf16 was
-        # exported. Engine filename is precision-neutral (vit.engine) because
-        # the input ONNX may be either FP32 or BF16; baking a precision tag
-        # into the engine name was misleading whenever the FP32 ONNX path was
-        # taken. The actual engine precision is recorded in
-        # export_metadata.json and inspectable via TRT tooling.
+        # FP32 ViT preferred for accuracy; falls back to BF16 if only bf16 was exported.
         (
             "ViT",
             "vit_fp32.onnx"
             if os.path.exists(os.path.join(onnx_dir, "vit_fp32.onnx"))
             else "vit_bf16.onnx",
-            "vit.engine",
+            "vit_bf16.engine",
         ),
         ("LLM", "llm_bf16.onnx", "llm_bf16.engine"),
         ("VL Self-Attention", "vl_self_attention.onnx", "vl_self_attention.engine"),
@@ -451,15 +382,13 @@ def build_full_pipeline(
         ("Action Decoder", "action_decoder.onnx", "action_decoder.engine"),
     ]
 
-    results: list[tuple[str, str, str]] = []
-    skipped: list[tuple[str, str]] = []  # (name, onnx_path) for components with no ONNX input
+    results = []
 
     for name, onnx_file, engine_file in components:
         onnx_path = os.path.join(onnx_dir, onnx_file)
 
         if not os.path.exists(onnx_path):
             logger.warning(f"Skipping {name}: ONNX file not found at {onnx_path}")
-            skipped.append((name, onnx_path))
             continue
 
         logger.info(f"\n{'#' * 80}")
@@ -467,16 +396,6 @@ def build_full_pipeline(
         logger.info(f"{'#' * 80}")
 
         engine_path = os.path.join(engine_dir, engine_file)
-        # Pick the precision that actually matches this ONNX's tensor types.
-        # The full_pipeline export is mixed-precision (ViT FP32, rest BF16),
-        # so the pipeline-wide ``precision`` argument is the default but each
-        # component uses what it was actually exported with.
-        component_precision = _precision_from_onnx_path(onnx_path, default=precision)
-        if component_precision != precision:
-            logger.info(
-                f"  Using precision={component_precision} for {name} (from ONNX filename); "
-                f"pipeline default is {precision}"
-            )
 
         try:
             # Derive shapes from the ONNX model itself
@@ -494,7 +413,7 @@ def build_full_pipeline(
             build_engine(
                 onnx_path=onnx_path,
                 engine_path=engine_path,
-                precision=component_precision,
+                precision=precision,
                 workspace_mb=workspace_mb,
                 min_shapes=min_shapes,
                 opt_shapes=opt_shapes,
@@ -514,22 +433,17 @@ def build_full_pipeline(
         logger.info(f"  {name:20s} -> {status}")
     logger.info("=" * 80)
 
-    # Every component must build; missing ONNX inputs and failed builds are
-    # equally fatal, otherwise an empty/half-built engine dir exits 0.
+    # Surface partial failures as a non-zero exit so callers (CI, deployment
+    # scripts) don't treat a half-built engine directory as a green build.
+    # Without this, a single sub-engine TRT failure was absorbed by the
+    # try/except above and the process still exited 0; downstream verify and
+    # benchmark steps then crashed on missing or stale engines.
     failures = [(name, status) for name, _, status in results if status.startswith("FAILED")]
-    if failures or skipped:
-        parts = []
-        if failures:
-            parts.append(
-                f"{len(failures)}/{len(components)} engine(s) failed: "
-                + "; ".join(f"{name} ({status})" for name, status in failures)
-            )
-        if skipped:
-            parts.append(
-                f"{len(skipped)}/{len(components)} component(s) had no ONNX input: "
-                + ", ".join(f"{name} ({path})" for name, path in skipped)
-            )
-        raise RuntimeError("Pipeline build incomplete — " + " | ".join(parts))
+    if failures:
+        raise RuntimeError(
+            f"Pipeline build failed for {len(failures)}/{len(results)} engine(s): "
+            + "; ".join(f"{name} ({status})" for name, status in failures)
+        )
 
 
 # ============================================================
@@ -541,7 +455,7 @@ def build_full_pipeline(
 class BuildConfig:
     """Configuration for building TensorRT engines from ONNX models."""
 
-    mode: BuildEngineMode = BuildEngineMode.single
+    mode: Literal["single", "full_pipeline"] = "single"
     """Build mode: 'single' (one engine) or 'full_pipeline' (all engines)."""
 
     onnx: str | None = None

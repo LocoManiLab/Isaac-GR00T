@@ -12,14 +12,12 @@ version = "0.1.0"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "albumentations==1.4.18",
+    "av==16.1.0",
     "diffusers==0.35.0.dev0",
     "dm-tree==0.1.8",
-    "huggingface-hub[cli]",
-    "jsonlines==4.0.0",
     "lmdb==1.7.5",
     "msgpack==1.1.0",
     "msgpack-numpy==0.4.8",
-    "opencv-python-headless>=4.5,<4.13",
     "pandas==2.2.3",
     "peft==0.17.1",
     "termcolor==3.2.0",
@@ -30,9 +28,9 @@ dependencies = [
     "tyro==0.9.17",
     "click==8.1.8",
     "datasets==3.6.0",
-    "cryptography>=46.0.7",
+    "cryptography>=44.0.0",
     "einops==0.8.1",
-    "gitpython==3.1.50",
+    "gitpython==3.1.46",
     "gymnasium==1.2.2",
     "matplotlib==3.10.1",
     "numpy==1.26.4",
@@ -72,11 +70,7 @@ diffusers = [{ index = "jetson-jp6-cu126" }]
 addopts = "--import-mode=importlib"
 markers = [
     "gpu: tests that require a GPU",
-    "multigpu: tests that require multiple GPUs and use all visible GPUs",
 ]
-# Include fixture setup/teardown in JUnit <testcase time="..."> so duration
-# reports reflect real wall-clock time instead of call-only.
-junit_duration_report = "total"
 
 [tool.ruff]
 line-length = 100

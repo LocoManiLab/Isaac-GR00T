@@ -68,6 +68,13 @@ class ServerConfig:
     use_sim_policy_wrapper: bool = False
     """Whether to use the sim policy wrapper"""
 
+    # TensorRT acceleration (optional)
+    trt_engine_path: str = ""
+    """Path to TRT engines directory (output of build_trt_pipeline.py). Leave empty to use PyTorch."""
+
+    trt_mode: str = "n17_full_pipeline"
+    """TRT inference mode. Use 'n17_full_pipeline' for full pipeline acceleration."""
+
 
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
@@ -77,6 +84,10 @@ def main(config: ServerConfig):
     print(f"  Device: {config.device}")
     print(f"  Host: {config.host}")
     print(f"  Port: {config.port}")
+
+    if config.trt_engine_path:
+        print(f"  TRT engines:  {config.trt_engine_path}")
+        print(f"  TRT mode:     {config.trt_mode}")
 
     # Create and start the server
     if config.model_path is not None:
@@ -89,6 +100,14 @@ def main(config: ServerConfig):
             device=config.device,
             strict=config.strict,
         )
+        if config.trt_engine_path:
+            deploy_dir = str(Path(__file__).resolve().parents[2] / "scripts" / "deployment")
+            if deploy_dir not in sys.path:
+                sys.path.insert(0, deploy_dir)
+            from trt_model_forward import setup_tensorrt_engines  # noqa: PLC0415
+
+            setup_tensorrt_engines(policy, config.trt_engine_path, mode=config.trt_mode)
+            print("  TRT engines loaded.")
     elif config.dataset_path is not None:
         if config.execution_horizon is None:
             raise ValueError(
@@ -148,15 +167,18 @@ def main(config: ServerConfig):
 
         policy = Gr00tSimPolicyWrapper(policy)
 
-    with PolicyServer(
+    server = PolicyServer(
         policy=policy,
         host=config.host,
         port=config.port,
-    ) as server:
-        try:
-            server.run()
-        except KeyboardInterrupt:
-            print("\nShutting down server...")
+    )
+
+    print(f"\n✓ Server ready — listening on {config.host}:{config.port}\n")
+
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
 
 
 if __name__ == "__main__":

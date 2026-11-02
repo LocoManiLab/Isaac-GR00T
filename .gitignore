@@ -1,30 +1,58 @@
-# Test debug artifacts
-/debug_video_decoding/
 
-# Finetune datasets
-/examples/GR00T-WholeBodyControl/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim/
-/examples/LIBERO/libero_10_no_noops_1.0.0_lerobot/
-/examples/LIBERO/libero_goal_no_noops_1.0.0_lerobot/
-/examples/LIBERO/libero_object_no_noops_1.0.0_lerobot/
-/examples/LIBERO/libero_spatial_no_noops_1.0.0_lerobot/
+# Misc
+outputs/
+checkpoints
+data/*
+apex/
+assets/
+runs
+runs/
+evaluate_results/
+.deepspeed*
 
-# UV lock file
-uv.lock
+
+# ai coding
+.codex/
+.claude/
+
+# Data types
+*.jit
+*.pt
+*.hdr
+*.webp
+*.pgm
+*.tiff
+*.tif
+*.tar
+*.tar.gz
+*.gz
+*.pkl
+*.pt
+*.bin
+*.pickle
+*.txt
+
+# Other uncheckable file types
+*.zip
+*.exe
+*.dll
+*.swp
+*.vscode
+*.DS_Store
+*.pyc
+*Thumbs.db
+*.patch
+
+# Credential information that should never be checked in
+credentials
+*.secret
+
+# ------------------------ BELOW IS AUTO-GENERATED FOR PYTHON REPOS ------------------------
 
 # Byte-compiled / optimized / DLL files
-__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
-
-# ML / experiment outputs
-wandb/
-outputs/
-logs/
-runs/
-out/
-recordings/
-plots/
-*.npz
 
 # C extensions
 *.so
@@ -37,18 +65,22 @@ dist/
 downloads/
 eggs/
 .eggs/
+lib/
+lib64/
+parts/
+results/
 sdist/
 var/
 wheels/
 share/python-wheels/
 *.egg-info/
-.installed.cfg
+.installed.config
 *.egg
-*.swp
-*.swo
 MANIFEST
 
 # PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -56,7 +88,7 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage
+# Unit test / coverage reports
 htmlcov/
 .tox/
 .nox/
@@ -75,16 +107,27 @@ cover/
 *.mo
 *.pot
 
-# App / framework stuff
+# Django stuff:
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
-# Flask
+# Flask stuff:
 instance/
 .webassets-cache
 
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Third party
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -92,79 +135,126 @@ instance/
 profile_default/
 ipython_config.py
 
-# Environment managers
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/#use-with-ide
 .pdm.toml
-.pdm-python
-.pdm-build/
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
 
-# IDEs
-.vscode/
-.idea/
-.cursor/
-.cursor*
-.claude/
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
 
-# Sphinx docs
-docs/_build/
+# SageMath parsed files
+*.sage.py
 
-# PyBuilder
-.pybuilder/
-target/
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Scrapy
-.scrapy
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# Mkdocs
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
 /site
 
-# Typing/static analysis
+# mypy
 .mypy_cache/
 .dmypy.json
 dmypy.json
-.pyre/
-.pytype/
-.ruff_cache/
-pyrightconfig.json
 
-# Cython
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
 cython_debug/
 
-# OS / editor junk
-.DS_Store
-*.code-workspace
+# ruff
+.ruff_cache
 
-# Virtual environments
-.venv/
-.venv/*
-env/
-venv/
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+CLIP
+.devcontainer/devcontainer.json
 
-# Mujoco
-MUJOCO_LOG.TXT
-playground/
+# Coverage
+.coverage
+coverage.xml
 
-# Shell scripts / batching
-batch_*.sh
-logs_*/
+# JUnit Reports
+report.xml
 
-# Git worktrees
-/wt
+# CI-CD
+temp/
+envs.txt
+manifest.json
 
-# General project data / artifacts
-episode_data/
-third_parties/
-*.rdb
-dump.rdb
 
-# Docker
-# Note: docker/.dockerignore is tracked — it controls the Docker build context
+# locks and t5 temp files
+*.locks*
+*.no_exist*
+*models--t5*
 
-/examples/GR00TWholeBodyControl/media/
-sysid_data/
-isaac_data/
-offline_open_loop_eval_plots/
+!data/fastwam_model_hf_release/libero_uncond_2cam224.pt
+!data/fastwam_model_hf_release/robotwin_uncond_3cam_384.pt
 
-# Generic model/data folders
-/models
-/data
+# OneLogger
+wandb/
+onelogger.err
+onelogger.log
+
+# editor backups
+*.bak*
+*.bak[0-9]*
+
+# non-code assets (available from upstream)
+demo_data/
+media/
+*.gif
+*.whl
+# keep the top-level README/doc images (GIFs are stored with Git LFS)
+!/media/
+!/media/*.gif
+
+gr00t_model/
+gr00t_model_trt/

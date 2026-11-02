@@ -65,79 +65,7 @@ logger = logging.getLogger(__name__)
 _deploy_dir = os.path.dirname(os.path.abspath(__file__))
 if _deploy_dir not in sys.path:
     sys.path.insert(0, _deploy_dir)
-from _trt_contract import assert_engine_matches_policy  # noqa: E402
 from trt_torch import Engine  # noqa: E402
-
-
-def _assert_supports_trt_padding_strip(attention_mask: torch.Tensor) -> None:
-    """Hard-fail if the TRT padding-strip path would silently corrupt B>1 batches.
-
-    transformers 4.57+ strips padding tokens before calling ``language_model``.
-    The TRT forward path replicates that with ``valid_mask = attention_mask[0] == 1``
-    so engine inputs match export-time captured shapes. With B=1 (or B>1 where
-    every sample has the same mask, e.g. tiled benchmarking via
-    ``verify_n1d7_trt.py --batch_size N``) this is correct. With B>1 *and*
-    heterogeneous masks (different valid lengths per sample), samples 1..B-1
-    would be silently mis-stripped using sample 0's padding template, producing
-    wrong inputs to the LLM TRT engine — no error, no warning, just degraded
-    output that's caught only via downstream eval drift.
-
-    Raise rather than warn so the caller can't miss it in the multi-rank log
-    torrent. To support heterogeneous B>1, switch to the all-batch
-    common-padding mask ``(attention_mask == 1).all(dim=0)`` (only strips
-    columns padded across *all* samples) — that is a semantic change requiring
-    modeling sign-off, so we hard-fail here for now.
-
-    Note on the build-time batch coupling: the ONNX export pipeline
-    (``scripts/deployment/export_onnx_n1d7.py``) bakes the batch dim as a
-    static shape — only ``seq_len`` is registered in ``dynamic_axes`` —
-    so a TRT engine built at ``--batch-size N`` only accepts B=N at
-    runtime. Lifting heterogeneous B>1 inference therefore requires both
-    rebuilding the engine at that batch size *and* relaxing this
-    assertion. Production today is B=1; this check covers the runtime
-    half of that contract.
-    """
-    if attention_mask.shape[0] <= 1:
-        return
-    if not (attention_mask == attention_mask[0:1]).all():
-        raise ValueError(
-            "TRT backbone padding-strip requires B=1 or homogeneous attention "
-            f"masks across the batch (got B={attention_mask.shape[0]} with "
-            "heterogeneous masks). attention_mask[0] would silently mis-strip "
-            "samples 1..B-1 using sample 0's padding template, producing wrong "
-            "inputs to the LLM TRT engine. Switch to "
-            "(attention_mask == 1).all(dim=0) to only strip columns padded "
-            "across all samples — but that is a semantic change requiring "
-            "modeling sign-off."
-        )
-
-
-def _resolve_vit_engine_path(trt_engine_path: str) -> str:
-    """Locate the ViT engine, tolerating the legacy filename.
-
-    Older builds emitted ``vit_bf16.engine`` even when the source ONNX
-    was FP32 — a name that obscured the actual engine precision. New
-    builds emit ``vit.engine`` (precision-neutral; the real dtype lives
-    in ``export_metadata.json`` and the ONNX tensor types). Existing
-    engine directories with the legacy name are still accepted with a
-    warning emitted on each call (no per-process suppression: the
-    warning content is path-dependent and call sites are few), to
-    encourage migration to the precision-neutral name. When no engine
-    is present we return the canonical name so the caller can put it
-    in any "not found" error.
-    """
-    new = os.path.join(trt_engine_path, "vit.engine")
-    legacy = os.path.join(trt_engine_path, "vit_bf16.engine")
-    if os.path.exists(new):
-        return new
-    if os.path.exists(legacy):
-        logger.warning(
-            f"Loading ViT engine from legacy path {legacy}; new builds "
-            f"emit vit.engine. Rebuild the pipeline to drop the misleading "
-            f"precision tag from the filename."
-        )
-        return legacy
-    return new
 
 
 # ============================================================
@@ -208,7 +136,6 @@ def _qwen3_vit_and_scatter(self, vl_input):
 
     # transformers 4.57+ strips padding tokens before calling language_model internally.
     # Apply the same stripping so TRT engine inputs match export-time captured shapes.
-    _assert_supports_trt_padding_strip(attention_mask)
     valid_mask = attention_mask[0] == 1  # [full_seq_len]
     if not valid_mask.all():
         inputs_embeds = inputs_embeds[:, valid_mask, :]
@@ -316,7 +243,6 @@ def qwen3_backbone_llm_trt_forward(self, vl_input):
     backbone_attention_mask = attention_mask == 1
 
     # Strip padding tokens (transformers 4.57+)
-    _assert_supports_trt_padding_strip(attention_mask)
     valid_mask = attention_mask[0] == 1
     if not valid_mask.all():
         inputs_embeds = inputs_embeds[:, valid_mask, :]
@@ -589,8 +515,6 @@ def setup_tensorrt_engines(policy, trt_engine_path, mode="n17_full_pipeline"):
               'vit_llm_only' (ViT TRT + LLM TRT, Action Head in PyTorch),
               'action_head' (Action Head TRT only), or 'dit_only'
     """
-    assert_engine_matches_policy(policy, trt_engine_path, source=f"setup_tensorrt_engines({mode})")
-
     if mode == "n17_full_pipeline":
         _setup_n17_full_pipeline(policy, trt_engine_path)
     elif mode == "vit_llm_only":
@@ -625,7 +549,7 @@ def _setup_n17_full_pipeline(policy, trt_engine_path):
     backbone._image_token_id = qwen_model.config.image_token_id
 
     # Load ViT TRT engine (optional — PyTorch ViT used as fallback for accuracy)
-    vit_engine_path = _resolve_vit_engine_path(trt_engine_path)
+    vit_engine_path = os.path.join(trt_engine_path, "vit_bf16.engine")
     use_vit_trt = os.path.exists(vit_engine_path)
     if use_vit_trt:
         print(f"Loading ViT engine: {vit_engine_path}")
@@ -729,7 +653,7 @@ def _setup_vit_llm_only(policy, trt_engine_path):
     backbone._image_token_id = qwen_model.config.image_token_id
 
     # Load ViT TRT engine
-    vit_engine_path = _resolve_vit_engine_path(trt_engine_path)
+    vit_engine_path = os.path.join(trt_engine_path, "vit_bf16.engine")
     if not os.path.exists(vit_engine_path):
         raise FileNotFoundError(
             f"ViT TRT engine not found: {vit_engine_path}\n"

@@ -4,14 +4,6 @@
 # After install, use `source scripts/activate_thor.sh` in each new shell.
 set -euo pipefail
 
-# Track /tmp source-build dirs so they get cleaned up even when `set -e`
-# aborts the script mid-build (e.g. a failed `pip install`). Without this
-# trap, a failed source build leaves /tmp/torchcodec behind, and the next
-# run on the same host (CI runner / Docker build layer / dev machine)
-# silently reuses the stale clone.
-TMP_BUILD_DIRS=()
-trap 'for _d in "${TMP_BUILD_DIRS[@]:-}"; do rm -rf "$_d"; done' EXIT
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
@@ -87,7 +79,7 @@ fi
 # fall back to $REPO_ROOT/.venv on bare metal.
 export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$REPO_ROOT/.venv}"
 echo "Running uv sync with the Thor pyproject at $SCRIPT_DIR (venv: $UV_PROJECT_ENVIRONMENT)..."
-uv sync --project "$SCRIPT_DIR" --no-install-project --extra dev
+uv sync --project "$SCRIPT_DIR" --no-install-project
 
 VENV_DIR="$UV_PROJECT_ENVIRONMENT"
 VENV_PYTHON="$VENV_DIR/bin/python"
@@ -97,18 +89,19 @@ echo "Installing gr00t in editable mode from the repo root (--no-deps)..."
 uv pip install --python "$VENV_PYTHON" --no-deps -e "$REPO_ROOT"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# torchcodec — prebuilt wheel or source build
-# Thor and Spark both use cp312 aarch64 wheels, but keep separate wheel
-# directories because the built bytes can differ across device stacks.
+# torchcodec — prebuilt wheel (shared with Spark, both FFmpeg 6) or source build
+# Thor and Spark share the same cp312 aarch64 wheel since both run Ubuntu 24.04
+# with FFmpeg 6. The wheel lives under spark/wheels/.
 # ──────────────────────────────────────────────────────────────────────────────
 echo "Installing FFmpeg runtime..."
 $SUDO apt-get update -qq
 $SUDO apt-get install -y --no-install-recommends ffmpeg
 
-if [ ! -d "$SCRIPT_DIR/wheels" ]; then
-    echo "Warning: Thor wheels directory not found at $SCRIPT_DIR/wheels — will attempt source build"
+SPARK_DIR="$SCRIPT_DIR/../spark"
+if [ ! -d "$SPARK_DIR/wheels" ]; then
+    echo "Warning: Spark wheels directory not found at $SPARK_DIR/wheels — will attempt source build"
 fi
-TORCHCODEC_WHL=$(find "$SCRIPT_DIR/wheels" -name 'torchcodec-*.whl' -print -quit 2>/dev/null || true)
+TORCHCODEC_WHL=$(find "$SPARK_DIR/wheels" -name 'torchcodec-*.whl' -print -quit 2>/dev/null || true)
 if [ -n "$TORCHCODEC_WHL" ]; then
     echo "Installing torchcodec from prebuilt wheel: $TORCHCODEC_WHL"
     uv pip install --python "$VENV_PYTHON" --force-reinstall --no-deps "$TORCHCODEC_WHL"
@@ -127,11 +120,10 @@ else
     export C_INCLUDE_PATH="${CUDA_HOME}/include:${C_INCLUDE_PATH:-}"
     export CPLUS_INCLUDE_PATH="${CUDA_HOME}/include:${CPLUS_INCLUDE_PATH:-}"
     rm -rf /tmp/torchcodec
-    TMP_BUILD_DIRS+=(/tmp/torchcodec)
     git clone --depth 1 --branch v0.10.0 https://github.com/pytorch/torchcodec.git /tmp/torchcodec
     cd /tmp/torchcodec
     I_CONFIRM_THIS_IS_NOT_A_LICENSE_VIOLATION=1 uv pip install --python "$VENV_PYTHON" . --no-build-isolation
-    cd -
+    cd - && rm -rf /tmp/torchcodec
 fi
 
 echo ""

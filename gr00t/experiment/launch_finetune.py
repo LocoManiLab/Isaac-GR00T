@@ -56,15 +56,13 @@ if __name__ == "__main__":
     if ft_config.modality_config_path is not None:
         load_modality_config(ft_config.modality_config_path)
 
-    dataset_paths = [path for path in ft_config.dataset_path.split(os.pathsep) if path]
-
     config = get_default_config().load_dict(
         {
             "data": {
                 "download_cache": False,
                 "datasets": [
                     {
-                        "dataset_paths": dataset_paths,
+                        "dataset_paths": [ft_config.dataset_path],
                         "mix_ratio": 1.0,
                         "embodiment_tag": embodiment_tag,
                     }
@@ -77,19 +75,12 @@ if __name__ == "__main__":
     # overwrite with finetune config supplied by the user
     config.model.tune_llm = ft_config.tune_llm
     config.model.tune_visual = ft_config.tune_visual
+    config.model.tune_top_llm_layers = ft_config.tune_top_llm_layers
     config.model.tune_projector = ft_config.tune_projector
     config.model.tune_diffusion_model = ft_config.tune_diffusion_model
     config.model.state_dropout_prob = ft_config.state_dropout_prob
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params
-    config.model.use_percentiles = ft_config.use_percentiles
-    if (ft_config.shortest_image_edge is None) != (ft_config.crop_fraction is None):
-        raise ValueError("shortest_image_edge and crop_fraction must be set together")
-    if ft_config.shortest_image_edge is not None:
-        config.model.shortest_image_edge = ft_config.shortest_image_edge
-        config.model.crop_fraction = ft_config.crop_fraction
-        config.model.image_crop_size = None
-        config.model.image_target_size = None
     if ft_config.extra_augmentation_config:
         config.model.extra_augmentation_config = json.loads(ft_config.extra_augmentation_config)
     else:
@@ -97,7 +88,15 @@ if __name__ == "__main__":
 
     config.model.load_bf16 = False
     config.model.reproject_vision = False
-    config.model.model_name = "nvidia/Cosmos-Reason2-2B"
+    # Read model_name from base model config.json to support local paths
+    _base_config_path = Path(ft_config.base_model_path) / "config.json"
+    if _base_config_path.exists():
+        import json as _json
+        with open(_base_config_path) as _f:
+            _base_cfg = _json.load(_f)
+        config.model.model_name = _base_cfg.get("model_name", "nvidia/Cosmos-Reason2-2B")
+    else:
+        config.model.model_name = "nvidia/Cosmos-Reason2-2B"
     config.model.backbone_trainable_params_fp32 = True
     config.model.use_relative_action = True
 
@@ -116,15 +115,14 @@ if __name__ == "__main__":
     config.training.max_steps = ft_config.max_steps
     config.training.weight_decay = ft_config.weight_decay
     config.training.warmup_ratio = ft_config.warmup_ratio
+    config.training.max_grad_norm = 0.8
     config.training.wandb_project = ft_config.wandb_project
 
     config.data.shard_size = ft_config.shard_size
     config.data.episode_sampling_rate = ft_config.episode_sampling_rate
     config.data.num_shards_per_epoch = ft_config.num_shards_per_epoch
-    config.data.ds_weights_alpha = ft_config.ds_weights_alpha
 
     config.training.save_only_model = ft_config.save_only_model
-    config.training.resume_from_checkpoint = ft_config.resume_from_checkpoint
     config.training.skip_weight_loading = ft_config.skip_weight_loading
 
     run(config)

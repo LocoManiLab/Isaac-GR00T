@@ -28,7 +28,6 @@ from test_support.runtime import (
     DEFAULT_SERVER_STARTUP_SECONDS,
     TEST_CACHE_PATH,
     assert_port_available,
-    fast_copy_tree,
     find_nvidia_egl_vendor_file,
     get_root,
     run_subprocess_step,
@@ -85,24 +84,18 @@ def _copy_tree_with_timing(
     *,
     symlinks: bool = False,
 ) -> None:
-    """fast_copy_tree(src → dst) wrapped in `timed(...)` plus a files/s summary.
+    """copytree(src → dst) wrapped in `timed(...)` plus a files/s summary.
 
-    Delegates the bulk copy to ``fast_copy_tree``, which streams the tree
-    through a single ``tar`` pipe instead of paying per-file open/stat/read/
-    close NFS round-trips. Job 313566325 observed 3.4 files/s with the
-    previous ``shutil.copytree`` and timed out; the tar-pipe path collapses
-    those round-trips into one sequential read.
-
-    File counting is done from the destination after the copy: ``os.walk``
-    on the local destination is metadata-cheap, while walking ``src`` over
-    a contended NFS mount could itself add minutes of stat-bound delay
-    that would muddy the reported throughput.
+    Only counts files (one extra readdir per directory, no per-file stat) so
+    instrumentation overhead stays negligible even on the slow-NFS day we're
+    trying to characterize.  files/s alone is enough to tell "metadata-bound
+    on small files" (low) from "bandwidth-bound on big files" (high).
     """
     with timed(label):
+        file_count = sum(len(files) for _, _, files in os.walk(src))
         t0 = time.perf_counter()
-        fast_copy_tree(src, dst, symlinks=symlinks)
+        shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=symlinks)
         elapsed = max(time.perf_counter() - t0, 1e-9)
-        file_count = sum(len(files) for _, _, files in os.walk(dst))
         print(
             f"[libero] {label}: {file_count} files, {file_count / elapsed:.1f} files/s",
             flush=True,

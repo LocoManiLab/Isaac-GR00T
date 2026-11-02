@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--extra_augmentation_config", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="/tmp/augmentation_vis")
     parser.add_argument("--num_frames", type=int, default=5)
+    parser.add_argument("--video_backend", type=str, default="torchcodec")
     args = parser.parse_args()
 
     if args.modality_config_path:
@@ -96,6 +97,7 @@ def main():
     loader = LeRobotEpisodeLoader(
         dataset_path=args.dataset_path,
         modality_configs=modality_configs,
+        video_backend=args.video_backend,
     )
     episode_df = loader[0]
 
@@ -144,6 +146,7 @@ def main():
         {
             "data": {
                 "download_cache": False,
+                "video_backend": args.video_backend,
                 "datasets": [
                     {
                         "dataset_paths": [args.dataset_path],

@@ -96,7 +96,8 @@ class LeRobotEpisodeLoader:
         dataset_path: Path to dataset root directory containing meta/ and data files
         modality_configs: Dictionary mapping modality names to ModalityConfig objects
                          that specify temporal sampling and data keys to load
-        decoder_kwargs: Additional arguments for the video decoder
+        video_backend: Video decoding backend ('torchcodec', 'decord', etc.)
+        video_backend_kwargs: Additional arguments for the video backend
 
     Example:
         >>> loader = LeRobotEpisodeLoader(
@@ -116,7 +117,8 @@ class LeRobotEpisodeLoader:
         self,
         dataset_path: str | Path,
         modality_configs: dict[str, ModalityConfig],
-        decoder_kwargs: dict[str, Any] | None = None,
+        video_backend: str = "torchcodec",
+        video_backend_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize LeRobot episode loader with dataset path and modality configurations.
@@ -127,7 +129,8 @@ class LeRobotEpisodeLoader:
         3. Computing effective episode lengths based on action horizon
         """
         self.dataset_path = Path(dataset_path)
-        self.decoder_kwargs = decoder_kwargs
+        self.video_backend = video_backend
+        self.video_backend_kwargs = video_backend_kwargs
 
         if not self.dataset_path.is_dir():
             raise FileNotFoundError(f"Dataset path does not exist: {self.dataset_path}")
@@ -186,12 +189,7 @@ class LeRobotEpisodeLoader:
         relative_stats_path = meta_dir / LEROBOT_RELATIVE_STATS_FILE_NAME
         if relative_stats_path.exists():
             with open(relative_stats_path, "r") as f:
-                relative_stats = json.load(f)
-            # Drop the cache-invalidation sidecar written by gr00t.data.stats
-            # (mirrors STATS_FINGERPRINTS_KEY there). Consumers index by
-            # feature name and would otherwise treat it as a stats group.
-            relative_stats.pop("__fingerprints__", None)
-            self.stats["relative_action"] = relative_stats
+                self.stats["relative_action"] = json.load(f)
 
         # Extract key configuration parameters
         self.feature_config = self.info_meta.get("features", {})
@@ -397,7 +395,9 @@ class LeRobotEpisodeLoader:
 
         return loaded_df
 
-    def _load_video_data(self, episode_index: int, indices: np.ndarray) -> dict[str, np.ndarray]:
+    def _load_video_data(
+        self, episode_index: int, indices: np.ndarray, clamp_out_of_range: bool = False
+    ) -> dict[str, np.ndarray]:
         """
         Load video data for all configured camera views at specified indices.
 
@@ -442,7 +442,9 @@ class LeRobotEpisodeLoader:
             video_data[image_key] = get_frames_by_indices(
                 str(video_path),
                 indices,
-                decoder_kwargs=self.decoder_kwargs or {},
+                video_backend=self.video_backend,
+                video_backend_kwargs=self.video_backend_kwargs or {},
+                clamp_out_of_range=clamp_out_of_range,
             )
 
         return video_data
@@ -600,8 +602,23 @@ class LeRobotEpisodeLoader:
         actual_length = min(len(df), nominal_length)
         df = df.iloc[:actual_length]
 
-        # Load synchronized video data
-        video_data = self._load_video_data(episode_id, np.arange(actual_length))
+        # Load synchronized video data.
+        # Some exporters (e.g. xperience-10m) symlink the FULL source-episode video and
+        # record the segment's first frame within it as `video_local_start_frame`
+        # (with `video_is_full_source_episode: true`); decode indices must be shifted
+        # by that offset or frames come from the wrong part of the source video.
+        # These full-source videos may also hold a few frames less than the mocap
+        # annotation, so out-of-range tail indices are clamped to the last frame.
+        video_frame_offset = 0
+        clamp_video_indices = False
+        if episode_meta.get("video_is_full_source_episode"):
+            video_frame_offset = int(episode_meta.get("video_local_start_frame") or 0)
+            clamp_video_indices = True
+        video_data = self._load_video_data(
+            episode_id,
+            np.arange(actual_length) + video_frame_offset,
+            clamp_out_of_range=clamp_video_indices,
+        )
 
         # Add video frames to dataframe as PIL Images
         for key in video_data.keys():

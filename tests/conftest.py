@@ -13,14 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared pytest configuration."""
+"""pytest hooks to make CI logs easier to read."""
 
 from __future__ import annotations
 
-import contextlib
 import os
-
-import pytest
+import time
 
 
 def _pin_xdist_worker_to_gpu() -> None:
@@ -53,6 +51,9 @@ def _pin_xdist_worker_to_gpu() -> None:
 
 
 _pin_xdist_worker_to_gpu()
+
+
+_test_start_times: dict[str, float] = {}
 
 
 def _configure_shared_caches() -> None:
@@ -94,24 +95,14 @@ def pytest_configure(config) -> None:  # noqa: ARG001
     # uv run inherit it — PYTEST_CURRENT_TEST alone can be cleared by uv.
     os.environ["GROOT_PATCH_MISTRAL"] = "1"
     os.environ["GROOT_HF_LOCAL_FIRST"] = "1"
-    os.environ.setdefault("GROOT_SKIP_HF_MODEL_WEIGHTS", "1")
     _configure_shared_caches()
 
 
-@pytest.fixture(scope="session")
-def load_hf_model_weights():
-    """Temporarily opt a test into normal Hugging Face checkpoint weight loading."""
+def pytest_runtest_logstart(nodeid: str, location: tuple) -> None:
+    _test_start_times[nodeid] = time.perf_counter()
+    print(f"\n\n{'=' * 80}\n[TEST START] {nodeid}\n", flush=True)
 
-    @contextlib.contextmanager
-    def _enabled():
-        previous = os.environ.get("GROOT_SKIP_HF_MODEL_WEIGHTS")
-        os.environ["GROOT_SKIP_HF_MODEL_WEIGHTS"] = "0"
-        try:
-            yield
-        finally:
-            if previous is None:
-                os.environ.pop("GROOT_SKIP_HF_MODEL_WEIGHTS", None)
-            else:
-                os.environ["GROOT_SKIP_HF_MODEL_WEIGHTS"] = previous
 
-    return _enabled
+def pytest_runtest_logfinish(nodeid: str, location: tuple) -> None:
+    elapsed = time.perf_counter() - _test_start_times.pop(nodeid, time.perf_counter())
+    print(f"\n[TEST END]   {nodeid}  ({elapsed:.1f}s)\n{'=' * 80}\n\n", flush=True)

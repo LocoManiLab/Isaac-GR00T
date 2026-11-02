@@ -15,7 +15,6 @@
 
 from copy import deepcopy
 import json
-import logging
 import os
 from pathlib import Path
 import random
@@ -53,71 +52,45 @@ except ImportError:
 # Suppress protobuf deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.protobuf")
 
-logger = logging.getLogger(__name__)
-
-### Projector-index assignments, declared as ``{projector_index: {tags}}``.
-#
-# This grouped form is the source of truth: a tag only shares a projector with
-# another tag if it is deliberately placed inside that index's set, so an
-# accidental collision can't slip in unnoticed. Multiple tags share an index
-# only when they describe the *same physical embodiment*. To add a brand-new
-# embodiment, give it an unused index; to add a data-source/subtask variant of
-# an existing one, add its tag to that group.
-#
-# ``EMBODIMENT_TAG_TO_PROJECTOR_INDEX`` below is derived from this and is the
-# public, tag-keyed lookup used everywhere else.
-_PROJECTOR_INDEX_GROUPS: dict[int, set[str]] = {
-    0: {"simpler_env_google"},
-    1: {"simpler_env_widowx"},
-    2: {"libero_sim"},
-    # Finetune placeholder projector; sim-eval robocasa tags piggyback on
-    # `new_embodiment`.
-    10: {"new_embodiment", "robocasa_panda_omron", "robocasa_gr1_tabletop"},
-    11: {"unitree_g1_sonic"},
-    24: {"oxe_droid_relative_eef_relative_joint"},
-    # Same G1 embodiment either side of the pretrain/posttrain boundary
-    # (`real_g1_*` is pretrain, `unitree_g1_full_body_*` is posttrain).
-    25: {
-        "real_g1_relative_eef_relative_joints",
-        "unitree_g1_full_body_with_waist_height_nav_cmd",
-    },
-    # One R1 Pro Sharpa robot, four data-source variants.
-    26: {
-        "real_r1_pro_sharpa_relative_eef",
-        "real_r1_pro_sharpa_relative_eef_human",
-        "real_r1_pro_sharpa_relative_eef_maxinsights",
-        "real_r1_pro_sharpa_relative_eef_mecka",
-    },
-    # xdof base + subtask refinement.
-    27: {
-        "xdof_relative_eef_relative_joint",
-        "xdof_relative_eef_relative_joint_subtask",
-    },
+### Mapping from embodiment tag to projector index.
+EMBODIMENT_TAG_TO_PROJECTOR_INDEX = {
+    ##### Pretrain embodiment ids (in base model) #####
+    "oxe_droid_relative_eef_relative_joint": 24,
+    "xdof_relative_eef_relative_joint": 27,
+    "xdof_relative_eef_relative_joint_subtask": 27,
+    "real_g1_relative_eef_relative_joints": 25,
+    "real_r1_pro_sharpa_relative_eef": 26,
+    "real_r1_pro_sharpa_relative_eef_human": 26,
+    "real_r1_pro_sharpa_relative_eef_maxinsights": 26,
+    "real_r1_pro_sharpa_relative_eef_mecka": 26,
+    ##### Posttrain embodiment ids #####
+    "unitree_g1_full_body_with_waist_height_nav_cmd": 25,
+    "unitree_g1_sonic": 11,
+    "unitree_g1_sonic_refmotion": 11,
+    "unitree_g1_sonic_refmotion_joints_benchmark_smi": 11,
+    "simpler_env_google": 0,
+    "simpler_env_widowx": 1,
+    "libero_sim": 2,
+    # heft controller (external/heft): action is the tracking policy's reference frame
+    # (ref_qpos 36d + hands 2d), a different action space from sonic's motion tokens, so it
+    # gets the fresh new-embodiment head (10) rather than sonic's pretrained head (11).
+    "unitree_g1_heft": 10,
+    # amo controller (external/g1_backend AmoBackend): the action is the teleop command
+    # stream (arm/hand joint targets + torso rpy/height + torso velocity command), a third
+    # action space distinct from both sonic's tokens and heft's reference frame — so it
+    # also takes the fresh new-embodiment head (10), not sonic's pretrained one.
+    "unitree_g1_amo": 10,
+    # almi (g1_bridge AlmiBackend): registered 2026-08-23 -- the 2026-08-11 almi commit added
+    # the modality config + EmbodimentTag but not this projector slot, so finetuning on an almi
+    # dataset died in the processor with KeyError("unitree_g1_almi"). Same slot as heft/amo
+    # (this fork's "new embodiment" projector), which is what matters when they are trained
+    # one at a time.
+    "unitree_g1_almi": 10,
+    "new_embodiment": 10,
+    # xperience-10m human ego data retargeted to G1, SONIC low-latency token actions.
+    # Shares the new-embodiment projector head (10): fresh head, no pretrain weights.
+    "xperience_g1_sonic": 10,
 }
-
-
-def _build_tag_to_projector_index(groups: dict[int, set[str]]) -> dict[str, int]:
-    """Flatten ``{index: {tags}}`` into ``{tag: index}``.
-
-    Guards against a tag accidentally appearing in two groups, which would
-    otherwise be silently resolved by insertion order into a single mapping.
-    """
-    mapping: dict[str, int] = {}
-    for index, tags in groups.items():
-        for tag in tags:
-            if tag in mapping:
-                raise ValueError(
-                    f"Embodiment tag {tag!r} is assigned to multiple projector "
-                    f"indices ({mapping[tag]} and {index}) in "
-                    "_PROJECTOR_INDEX_GROUPS; each tag must map to exactly one index."
-                )
-            mapping[tag] = index
-    return mapping
-
-
-EMBODIMENT_TAG_TO_PROJECTOR_INDEX: dict[str, int] = _build_tag_to_projector_index(
-    _PROJECTOR_INDEX_GROUPS
-)
 
 
 def build_processor(model_name: str, transformers_loading_kwargs: dict) -> Qwen3VLProcessor:
@@ -216,6 +189,7 @@ class Gr00tN1d7Processor(BaseProcessor):
         state_dropout_prob: float = 0.0,
         # Normalization
         use_mean_std: bool = False,
+        # Backward-compat params (stored but not actively used)
         letter_box_transform: bool = False,
     ):
         self.modality_configs = parse_modality_configs(modality_configs)
@@ -292,7 +266,6 @@ class Gr00tN1d7Processor(BaseProcessor):
                 image_crop_size,
                 random_rotation_angle,
                 color_jitter_params,
-                letter_box_transform=self.letter_box_transform,
             )
         self._collator = self.data_collator_class(
             model_name=model_name,
@@ -322,24 +295,10 @@ class Gr00tN1d7Processor(BaseProcessor):
         for key in statistics:
             if key not in self.statistics or override:
                 if override:
-                    logger.info("Overriding statistics for embodiment %r", key)
+                    print(f"Overriding statistics for {key}")
                 self.statistics[key] = deepcopy(statistics[key])
             else:
-                # Surfaced as a warning (not print) because callers running with
-                # override_pretraining_statistics=False on a mixture dataset will
-                # otherwise silently keep the pre-existing pretraining stats and
-                # discard newly-merged per-dataset stats — training proceeds with
-                # the wrong mean/std and only an easy-to-miss stdout line records
-                # the drop.
-                logger.warning(
-                    "Statistics for embodiment %r already present; new stats "
-                    "DISCARDED (override=False). If the new data differs from "
-                    "the existing distribution this will cause silent "
-                    "normalization mismatch — pass override=True (or "
-                    "override_pretraining_statistics=True at the dataset level) "
-                    "to use the merged stats instead.",
-                    key,
-                )
+                print(f"Embodiment tag {key} already in statistics, skipping updating")
 
         self.state_action_processor.set_statistics(statistics, override=override)
 
@@ -783,34 +742,16 @@ class Gr00tN1d7Processor(BaseProcessor):
         transformers_loading_kwargs = kwargs.pop(
             "transformers_loading_kwargs", {"trust_remote_code": True}
         )
-        hub_keys = (
-            "_commit_hash",
-            "cache_dir",
-            "force_download",
-            "local_files_only",
-            "proxies",
-            "revision",
-            "subfolder",
-            "token",
-        )
-        hub_kwargs = {key: kwargs.pop(key) for key in hub_keys if key in kwargs}
-        use_auth_token = kwargs.pop("use_auth_token", None)
-        if "token" not in hub_kwargs and use_auth_token is not None:
-            hub_kwargs["token"] = use_auth_token
         pretrained_model_name_or_path = Path(pretrained_model_name_or_path)
         config_file = pretrained_model_name_or_path / "processor_config.json"
         statistics_file = pretrained_model_name_or_path / "statistics.json"
         embodiment_id_file = pretrained_model_name_or_path / "embodiment_id.json"
         is_local = os.path.isdir(pretrained_model_name_or_path)
         if not is_local:
-            config_file = Path(
-                cached_file(pretrained_model_name_or_path, "processor_config.json", **hub_kwargs)
-            )
-            statistics_file = Path(
-                cached_file(pretrained_model_name_or_path, "statistics.json", **hub_kwargs)
-            )
+            config_file = Path(cached_file(pretrained_model_name_or_path, "processor_config.json"))
+            statistics_file = Path(cached_file(pretrained_model_name_or_path, "statistics.json"))
             embodiment_id_file = Path(
-                cached_file(pretrained_model_name_or_path, "embodiment_id.json", **hub_kwargs)
+                cached_file(pretrained_model_name_or_path, "embodiment_id.json")
             )
 
         with open(config_file, "r") as f:

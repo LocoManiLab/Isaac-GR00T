@@ -42,14 +42,15 @@ class EmbodimentTag(Enum):
     Pre-registered posttrain tags (require finetuned checkpoint):
     - UNITREE_G1           -> "unitree_g1_full_body_with_waist_height_nav_cmd"
     - UNITREE_G1_SONIC     -> "unitree_g1_sonic"
+    - UNITREE_G1_HEFT      -> "unitree_g1_heft"
+    - UNITREE_G1_AMO       -> "unitree_g1_amo"
+    - UNITREE_G1_ALMI      -> "unitree_g1_almi"
     - SIMPLER_ENV_GOOGLE   -> "simpler_env_google"
     - SIMPLER_ENV_WIDOWX   -> "simpler_env_widowx"
     - LIBERO_PANDA         -> "libero_sim"
 
     Finetuning tag (for custom robots):
-    - NEW_EMBODIMENT        -> "new_embodiment"
-    - ROBOCASA_PANDA_OMRON  -> "robocasa_panda_omron"
-    - ROBOCASA_GR1_TABLETOP -> "robocasa_gr1_tabletop"
+    - NEW_EMBODIMENT       -> "new_embodiment"
 
     Use ``EmbodimentTag.resolve(s)`` to look up a tag by name or value,
     case-insensitively.
@@ -109,6 +110,43 @@ class EmbodimentTag(Enum):
     The Unitree G1 robot with SONIC whole-body controller. VLA action space is SONIC latents.
     """
 
+    UNITREE_G1_SONIC_REFMOTION = "unitree_g1_sonic_refmotion"
+    """
+    The Unitree G1 SONIC controller, but VLA outputs SMPL ref-motion (smpl_pose) instead of latents.
+    """
+
+    UNITREE_G1_SONIC_REFMOTION_JOINTS_BENCHMARK_SMI = "unitree_g1_sonic_refmotion_joints_benchmark_smi"
+    """
+    Unitree G1 SONIC, VLA outputs SMPL ref-motion as smpl_joints (72d) — for benchmark SMI / Tabletop datasets.
+    """
+
+    UNITREE_G1_HEFT = "unitree_g1_heft"
+    """
+    The Unitree G1 robot with the heft (motion_tracking sim2real) whole-body controller. VLA action
+    space is the tracking policy's reference frame: root pos (3) + root quat wxyz (4) + 29 joint
+    targets, plus a 2-dim hand open/close scalar (soma's ``external/heft`` data collection).
+    """
+
+    UNITREE_G1_AMO = "unitree_g1_amo"
+    """
+    The Unitree G1 robot with the amo whole-body controller. VLA action space is the
+    teleoperator's own command stream: arm (7+7) and hand (7+7) joint targets, torso
+    rpy (3) + base height (1), and a body-frame torso velocity command
+    (vx, vy, vyaw) + target_yaw -- 36 dims, state 32 (the same minus the 4 commands).
+    """
+
+    UNITREE_G1_ALMI = "unitree_g1_almi"
+    """
+    The Unitree G1 robot with the ALMI dual-policy whole-body controller (a lower policy
+    for the 12 leg joints, an upper one for the 17 waist+arm joints). The VLA action space
+    is ALMI's own split command: a body-frame twist for the legs (lin_vel 2 + ang_vel_z 1
+    + base_height 1) and a retargeted pose reference for the upper body (waist_rpy 3,
+    torso-frame EE pos 3+3 / quat 4+4, and 17 upper joint targets), plus 7+7 Dex3 finger
+    targets -- 52 dims, state 32. NOT the 29-D joint target the two policies produce: that
+    is a function of this command plus the checkpoint, and storing it would give a VLA a
+    second, redundant action space to shortcut through.
+    """
+
     SIMPLER_ENV_GOOGLE = "simpler_env_google"
     """
     The SimplerEnv Google robot.
@@ -130,16 +168,11 @@ class EmbodimentTag(Enum):
     Any new embodiment.
     """
 
-    ROBOCASA_GR1_TABLETOP = "robocasa_gr1_tabletop"
+    XPERIENCE_G1_SONIC = "xperience_g1_sonic"
     """
-    RoboCasa GR1 tabletop tasks with arms, waist, and Fourier hands.
-    Uses the custom-embodiment finetuning projector slot.
-    """
-
-    ROBOCASA_PANDA_OMRON = "robocasa_panda_omron"
-    """
-    RoboCasa Panda arm tasks with an Omron gripper.
-    Uses the custom-embodiment finetuning projector slot.
+    Human ego-view mocap (xperience-10m) retargeted to Unitree G1 via GMR, with SONIC
+    low-latency motion-token actions. State is the retargeted G1 kinematics
+    (dof pos/vel + root pose); action is the 64D SONIC low-latency latent.
     """
 
     @classmethod
@@ -207,6 +240,11 @@ POSTTRAIN_TAGS: frozenset[EmbodimentTag] = frozenset(
     {
         EmbodimentTag.UNITREE_G1,
         EmbodimentTag.UNITREE_G1_SONIC,
+        EmbodimentTag.UNITREE_G1_SONIC_REFMOTION_JOINTS_BENCHMARK_SMI,
+        EmbodimentTag.UNITREE_G1_SONIC_REFMOTION,
+        EmbodimentTag.UNITREE_G1_HEFT,
+        EmbodimentTag.UNITREE_G1_AMO,
+        EmbodimentTag.UNITREE_G1_ALMI,
         EmbodimentTag.SIMPLER_ENV_GOOGLE,
         EmbodimentTag.SIMPLER_ENV_WIDOWX,
         EmbodimentTag.LIBERO_PANDA,
@@ -217,8 +255,7 @@ POSTTRAIN_TAGS: frozenset[EmbodimentTag] = frozenset(
 FINETUNE_ONLY_TAGS: frozenset[EmbodimentTag] = frozenset(
     {
         EmbodimentTag.NEW_EMBODIMENT,
-        EmbodimentTag.ROBOCASA_PANDA_OMRON,
-        EmbodimentTag.ROBOCASA_GR1_TABLETOP,
+        EmbodimentTag.XPERIENCE_G1_SONIC,
     }
 )
 """Tags for custom robots (finetuning only, not in any shipped checkpoint)."""

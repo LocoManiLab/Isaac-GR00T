@@ -60,7 +60,6 @@ class Gr00tN1d7Config(PretrainedConfig):
     random_rotation_angle: int | None = None
     color_jitter_params: dict[str, float] | None = None
     use_albumentations_transforms: bool = True
-    letter_box_transform: bool = False
     # Extra augmentation config (mask-based and others).
     extra_augmentation_config: dict | None = None
     formalize_language: bool = True
@@ -73,7 +72,7 @@ class Gr00tN1d7Config(PretrainedConfig):
     # Action head configuration parameters
     max_state_dim: int = 132  # Default from state_shape
     max_action_dim: int = 132  # Default from action_shape
-    action_horizon: int = 40
+    action_horizon: int = 64
     hidden_size: int = 1024
     input_embedding_dim: int = 1536
 
